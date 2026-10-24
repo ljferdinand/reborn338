@@ -1,0 +1,112 @@
+{
+ "environment": {
+  "system": "Windows",
+  "machine": "AMD64",
+  "python": "3.13.15",
+  "numpy": "2.5.3",
+  "commit": "0369e66",
+  "bass_engine": "tpt"
+ },
+ "fixtures": {
+  "h303_cut127_reso000": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -18.0576,
+   "rms_db": -27.1963,
+   "centroid_hz": 647.836,
+   "rolloff85_hz": 1208.551,
+   "sha256": "7f279c790c8875f308eb06f1ab8d7260"
+  },
+  "h303_cut127_reso127": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -11.7616,
+   "rms_db": -26.1482,
+   "centroid_hz": 3293.269,
+   "rolloff85_hz": 4154.562,
+   "sha256": "2ce2a21de29e0a7ac2f3344a9825811e"
+  },
+  "h303_cut016_reso060": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -20.0234,
+   "rms_db": -32.0519,
+   "centroid_hz": 337.607,
+   "rolloff85_hz": 510.068,
+   "sha256": "06a9b12c9370dc08db4522d88a17022b"
+  },
+  "g303_acc127_run4": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -7.7883,
+   "rms_db": -28.3124,
+   "centroid_hz": 2783.435,
+   "rolloff85_hz": 5446.555,
+   "sha256": "f18a67eeb69bfbe734a1e1aea71573b6"
+  },
+  "g303_acc000_none": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -16.2604,
+   "rms_db": -32.7184,
+   "centroid_hz": 1368.899,
+   "rolloff85_hz": 2608.209,
+   "sha256": "fe239615767d90316196e84248af989f"
+  },
+  "g303_slide_on_up": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -15.9009,
+   "rms_db": -39.7444,
+   "centroid_hz": 939.178,
+   "rolloff85_hz": 1687.665,
+   "sha256": "fc231297c25ad43b8832d48e3dec20e6"
+  },
+  "g303_wave0_cut064": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -20.5352,
+   "rms_db": -31.9811,
+   "centroid_hz": 429.384,
+   "rolloff85_hz": 761.737,
+   "sha256": "a84dfaf380accc60ee5cd5489dd3bf77"
+  },
+  "g303_wave1_cut064": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -23.6764,
+   "rms_db": -32.0677,
+   "centroid_hz": 433.202,
+   "rolloff85_hz": 769.812,
+   "sha256": "987d456001781613a07d0df6005c0ded"
+  },
+  "g303_note00": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -15.3499,
+   "rms_db": -33.0264,
+   "centroid_hz": 1377.563,
+   "rolloff85_hz": 2215.228,
+   "sha256": "b0e804faf33ffe7bd13b36010cab623d"
+  },
+  "g303_note12": {
+   "frames": 176400,
+   "rate": 44100,
+   "channels": 2,
+   "peak_db": -15.339,
+   "rms_db": -30.4217,
+   "centroid_hz": 1454.224,
+   "rolloff85_hz": 2216.574,
+   "sha256": "b1c2e3923dfadfb6cbbea679857fa789"
+  }
+ }
+}

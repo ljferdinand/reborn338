@@ -1,0 +1,11 @@
+# Required for the objective and for grid/auto.
+numpy>=1.24
+
+# Needed for the neldermead polish (and therefore for the default 'auto' method).
+scipy>=1.7
+
+# Needed only for method=cma (Component B, once its topology is derived).
+# cma>=3.3
+
+# Optional alternative sample-efficient route (not used by this driver):
+# optuna>=3.0

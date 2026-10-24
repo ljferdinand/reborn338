@@ -1,0 +1,46 @@
+# Build outputs
+/build/
+/build-*/
+/out/
+*.obj
+*.lib
+*.exe
+*.pdb
+*.iso
+
+# Rendered audio and measurement output
+*.wav
+*.aif
+*.aiff
+*.flac
+/renders/
+
+# Third-party content. Mods, songs and samples from the original program must
+# never be committed, nor keys or decoded content estimated from a mod.
+*.rbm
+*.rbs
+*.rbsx
+/fixtures-*/
+/samples-*/
+/manualPNGs/
+
+# Images: the repository draws its own interface and ships no artwork.
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+
+# The generated example songs are the one exception (examples/make_examples.py).
+!/examples/*.rbs
+!/examples/*.rbsx
+
+# IDE and tooling
+.vs/
+.vscode/
+.idea/
+*.user
+*.zip
+__pycache__/
+*.pyc
+.DS_Store

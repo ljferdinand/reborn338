@@ -1,0 +1,32 @@
+{
+  "_comment": "Harness contract for optimising Reborn 303 parameters against a real ReBirth export. Copy to config.json and edit paths/params. The reference MUST be a 303-isolated, effects-off export (solo the acid line, effects rack off) so the objective reflects the 303, not a drum-dominated mix.",
+
+  "render": {
+    "binary": "./build/Release/reborn_render",
+    "base_args": ["--solo", "bass1", "--no-fx", "--seconds", "8", "--sr", "44100"],
+    "required_args": ["--solo", "--no-fx"],
+    "out_flag": "--out",
+    "expect_channels": 2,
+    "env_fixed": {},
+    "timeout_s": 120
+  },
+
+  "reference": "refs/original_303_solo_nofx.wav",
+
+  "objective": {
+    "type": "band_distance",
+    "seconds": 8,
+    "band_weights": null,
+    "_band_weights_hint": "Ten values, one per octave band [20-40, 40-80, 80-160, 160-315, 315-630, 630-1250, 1250-2500, 2500-5000, 5000-10000, 10000-20000]. For the Component A low-mid shelf, weight bands 3-5 (80-630 Hz) higher, e.g. [1,1,3,3,3,1,1,1,1,1]. Leave null for uniform.",
+    "_type_hint": "band_distance is the objective visible in measure_ab.py. For the 303 brightness gap your methodology prefers the env-swept spectral centroid; wire that into metrics.env_swept_centroid_distance and set type to 'env_swept_centroid'."
+  },
+
+  "search_space": {
+    "amp_decay": { "env": "REBORN_AMP_DECAY", "low": 0.02, "high": 0.20, "init": 0.06, "grid": 5 },
+    "amp_sus":   { "env": "REBORN_AMP_SUS",   "low": 0.02, "high": 0.20, "init": 0.08, "grid": 5 }
+  },
+
+  "_component_a_shelf_hint": "Component A is a resonance-independent low-mid shelf. Once you expose its gain and corner as REBORN_* variables, add them here, for example: \"shelf_gain_db\": { \"env\": \"REBORN_SHELF_GAIN_DB\", \"low\": -3, \"high\": 6, \"init\": 0, \"grid\": 7 }, \"shelf_freq_hz\": { \"env\": \"REBORN_SHELF_FREQ_HZ\", \"low\": 200, \"high\": 800, \"init\": 400, \"grid\": 5 }. Names are illustrative; use whatever the engine reads.",
+
+  "workdir": ".opt_runs"
+}

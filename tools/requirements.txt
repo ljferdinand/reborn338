@@ -1,0 +1,14 @@
+# Python packages for the measurement, analysis and fixture tools in tools/.
+# The C++ build needs none of them. CI's platform-baseline check needs only numpy.
+# Tested with numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2, cma 4.5.0 and
+# Pillow 12.3.0 on Python 3.13.
+#
+#     python -m pip install -r tools/requirements.txt
+numpy
+scipy
+matplotlib
+# Optional: the CMA-ES search in tools/optimize/optimize.py.
+cma
+# Optional: tools/measure/pcf_appendixd.py, which reads page images of the
+# ReBirth manual from your own copy.
+Pillow

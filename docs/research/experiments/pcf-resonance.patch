@@ -1,0 +1,119 @@
+diff --git a/src/effects/pcf.cpp b/src/effects/pcf.cpp
+index 4cee035..04b88cd 100644
+--- a/src/effects/pcf.cpp
++++ b/src/effects/pcf.cpp
+@@ -265,6 +265,22 @@ public:
+         const float kTarget = dampingFor(p_[C_RES]);
+ 
+         const float base   = clampf(p_[C_CUT], 0.0f, 1.0f);
++        // PROBE (exp/pcf-resonance): scale the envelope's contribution to the
++        // cutoff. Tests whether ours over-opens at the attack (resonance pushed
++        // above the source-rich band -> dull attack). Default 1.0 = unchanged.
++        static const float ENVSC = []{ const char* e=std::getenv("REBORN_PCF_ENVSC"); return e?(float)std::atof(e):1.0f; }();
++        // PROBE (exp/pcf-resonance): resonance core. 0 = zero-delay TPT (shipped);
++        // 1 = Chamberlin SVF with delayed (one-sample) resonance feedback,
++        // oversampled REBORN_PCF_OS times. The loop delay makes the resonance
++        // ring/ride during a fast sweep (the "flangy chirp"), which the TPT does
++        // not. Default 0 = unchanged.
++        static const int PCF_CORE = []{ const char* e=std::getenv("REBORN_PCF_CORE"); return e?std::atoi(e):0; }();
++        static const int PCF_OS   = []{ const char* e=std::getenv("REBORN_PCF_OS"); return e?std::atoi(e):4; }();
++        // PROBE: constant offset subtracted from the envelope's cutoff-parameter
++        // contribution (floored at 0). The measured over-opening is a constant
++        // ~0.073 cparam offset during the sweep, not a depth scale, and it
++        // vanishes at Amt 0, which max(0, env - off) preserves. Default 0.
++        static const float ENVOFF = []{ const char* e=std::getenv("REBORN_PCF_ENVOFF"); return e?(float)std::atof(e):0.0f; }();
+         const double samplesPer32 = (60.0 / tempo_ / 8.0) * sr_;
+         const float envAmt = clampf(p_[C_ENV], 0.0f, 1.0f);
+ 
+@@ -294,7 +310,8 @@ public:
+ 
+             // Freq and the envelope sum in PARAMETER space, and the sum is
+             // clamped, which is why Amt does nothing once Freq is at maximum.
+-            const float cparam = clampf(cutSm_ + envSm_ * env_, 0.0f, 1.0f);
++            const float envContrib = std::max(0.0f, ENVSC * envSm_ * env_ - ENVOFF);
++            const float cparam = clampf(cutSm_ + envContrib, 0.0f, 1.0f);
+             // The corner rides the resonance knob (see kResFc* above).
+             const float rr = clampf(p_[C_RES], 0.0f, kResMaxByte);
+             const float fcScale = 1.0f + rr * (kResFcB + rr * kResFcC);
+@@ -302,35 +319,57 @@ public:
+             if (fc > nyqLimit)    fc = nyqLimit;
+             if (fc < kMinCutoffHz) fc = kMinCutoffHz;
+ 
+-            // TPT (zero-delay-feedback) coefficients, shared by both channels.
+-            const float g  = std::tan(static_cast<float>(kPi) * fc / sr);
+-            const float a1 = 1.0f / (1.0f + g * (g + k));
+-            const float a2 = g * a1;
+-            const float a3 = g * a2;
+             // One filter, two taps. The bandpass tap gets a constant gain: its
+             // resonant peak already grows with Q like ReBirth's (see kBpTrim).
+             const bool  bp    = p_[C_MODE] >= 0.5f;
+             const float bpAmp = kBpTrim;
+ 
+-            // --- Left core ---
+-            {
+-                const float x  = io.left[i] * gIn;
+-                const float v3 = x - ic2L_;
+-                const float v1 = a1 * ic1L_ + a2 * v3;          // bandpass
+-                const float v2 = ic2L_ + a2 * ic1L_ + a3 * v3;  // lowpass
+-                ic1L_ = flushDenormal(2.0f * v1 - ic1L_);
+-                ic2L_ = flushDenormal(2.0f * v2 - ic2L_);
+-                io.left[i] = flushDenormal(bp ? v1 * bpAmp : v2);
+-            }
+-            // --- Right core ---
+-            {
+-                const float x  = io.right[i] * gIn;
+-                const float v3 = x - ic2R_;
+-                const float v1 = a1 * ic1R_ + a2 * v3;
+-                const float v2 = ic2R_ + a2 * ic1R_ + a3 * v3;
+-                ic1R_ = flushDenormal(2.0f * v1 - ic1R_);
+-                ic2R_ = flushDenormal(2.0f * v2 - ic2R_);
+-                io.right[i] = flushDenormal(bp ? v1 * bpAmp : v2);
++            if (PCF_CORE == 1) {
++                // --- Chamberlin SVF, DELAYED resonance feedback, oversampled ---
++                // bp is used BEFORE it is updated, so the resonance loop carries a
++                // unit delay and rings/rides on a fast sweep. Oversampled for
++                // stability; a soft clip on the resonance tap bounds self-osc at
++                // high Q (like the analog output stage) without a hard clamp click.
++                const int   os = PCF_OS < 1 ? 1 : PCF_OS;
++                float fC = 2.0f * std::sin(static_cast<float>(kPi) * fc / (sr * (float)os));
++                if (fC > 1.6f) fC = 1.6f;
++                const float xL = io.left[i] * gIn, xR = io.right[i] * gIn;
++                for (int o = 0; o < os; ++o) {
++                    ic2L_ += fC * ic1L_;                                  // lp += f*bp
++                    const float hpL = xL - ic2L_ - k * std::tanh(ic1L_);  // delayed, soft-clipped fb
++                    ic1L_ += fC * hpL;                                    // bp += f*hp
++                    ic2R_ += fC * ic1R_;
++                    const float hpR = xR - ic2R_ - k * std::tanh(ic1R_);
++                    ic1R_ += fC * hpR;
++                }
++                ic1L_ = flushDenormal(ic1L_); ic2L_ = flushDenormal(ic2L_);
++                ic1R_ = flushDenormal(ic1R_); ic2R_ = flushDenormal(ic2R_);
++                io.left[i]  = flushDenormal(bp ? ic1L_ * bpAmp : ic2L_);
++                io.right[i] = flushDenormal(bp ? ic1R_ * bpAmp : ic2R_);
++            } else {
++                // TPT (zero-delay-feedback) coefficients, shared by both channels.
++                const float g  = std::tan(static_cast<float>(kPi) * fc / sr);
++                const float a1 = 1.0f / (1.0f + g * (g + k));
++                const float a2 = g * a1;
++                const float a3 = g * a2;
++                { // left
++                    const float x  = io.left[i] * gIn;
++                    const float v3 = x - ic2L_;
++                    const float v1 = a1 * ic1L_ + a2 * v3;          // bandpass
++                    const float v2 = ic2L_ + a2 * ic1L_ + a3 * v3;  // lowpass
++                    ic1L_ = flushDenormal(2.0f * v1 - ic1L_);
++                    ic2L_ = flushDenormal(2.0f * v2 - ic2L_);
++                    io.left[i] = flushDenormal(bp ? v1 * bpAmp : v2);
++                }
++                { // right
++                    const float x  = io.right[i] * gIn;
++                    const float v3 = x - ic2R_;
++                    const float v1 = a1 * ic1R_ + a2 * v3;
++                    const float v2 = ic2R_ + a2 * ic1R_ + a3 * v3;
++                    ic1R_ = flushDenormal(2.0f * v1 - ic1R_);
++                    ic2R_ = flushDenormal(2.0f * v2 - ic2R_);
++                    io.right[i] = flushDenormal(bp ? v1 * bpAmp : v2);
++                }
+             }
+         }
+     }

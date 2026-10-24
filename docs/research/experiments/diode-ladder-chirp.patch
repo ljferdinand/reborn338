@@ -1,0 +1,141 @@
+diff --git a/src/devices/bass_synth.cpp b/src/devices/bass_synth.cpp
+index bde18de..d982aca 100644
+--- a/src/devices/bass_synth.cpp
++++ b/src/devices/bass_synth.cpp
+@@ -1129,6 +1129,8 @@ public:
+         // EXPERIMENTAL (do not commit to main): coupled nonlinear diode ladder,
+         // selected by REBORN_FILTER=diode. Clean-room from the diode-ladder circuit.
+         const bool   useDiode = []{ const char* e=std::getenv("REBORN_FILTER"); return e && e[0]=='d'; }();
++        // EXPERIMENTAL: zero-delay (TPT) coupled diode ladder, REBORN_FILTER=zd.
++        const bool   useZD    = []{ const char* e=std::getenv("REBORN_FILTER"); return e && e[0]=='z'; }();
+         // EXPERIMENTAL: "ReBirth-era" ladder, REBORN_FILTER=rb. Design memo
+         // 2026-07-23: coupled forward-Euler diode-ladder STRUCTURE run at the
+         // NATIVE rate with no prewarp and no oversampling (the Euler warp and
+@@ -1193,6 +1195,40 @@ public:
+         const double D_FBHP = []{ const char* e=std::getenv("REBORN_D_FBHP"); return e?std::atof(e):0.0;  }();
+         const double D_G    = []{ const char* e=std::getenv("REBORN_D_G");    return e?std::atof(e):1.0;  }();
+         const double D_ITER = []{ const char* e=std::getenv("REBORN_D_ITER"); return e?std::atof(e):4.0;  }();
++        // Output HF rolloff for the diode core: the last-stage tanh injects HF
++        // above the corner that the 4-pole cascade does not filter, an excess
++        // above ~4.5 kHz that is inaudibly low in energy but inflates the flat
++        // band net (docs/research/PLAN_DIODE_CHIRP.md). A one-pole LP on the output flattens
++        // it. 0 = off.
++        const double D_HF = []{ const char* e=std::getenv("REBORN_D_HF"); return e?std::atof(e):0.0;  }();
++        const double aDHf = (D_HF > 0.0) ? (1.0 - std::exp(-2.0*kPi*D_HF/sr)) : 0.0;
++        // EXPERIMENTAL (do not commit to main): zero-delay (TPT) coupled diode
++        // ladder params, REBORN_FILTER=zd. Trapezoidal prewarped integrators put
++        // the corner EXACTLY at fc (g = tan(pi*fc/sr)) so it is decoupled from
++        // the diode knee (ZD_VT) and the resonance gain (ZD_K); the coupled loop
++        // is solved implicitly per substep by fixed-point iteration. This is the
++        // untangled core the backward-Euler `diode` scaffold could not be
++        // (docs/research/PLAN_DIODE_CHIRP.md, 2026-09-05).
++        const double ZD_G    = []{ const char* e=std::getenv("REBORN_ZD_G");    return e?std::atof(e):1.0;  }();  // corner scale (expect ~1)
++        const double ZD_K    = []{ const char* e=std::getenv("REBORN_ZD_K");    return e?std::atof(e):2.0;  }();  // resonance gain onto k
++        const double ZD_VT   = []{ const char* e=std::getenv("REBORN_ZD_VT");   return e?std::atof(e):0.30; }();  // diode knee (saturation)
++        const double ZD_P1   = []{ const char* e=std::getenv("REBORN_ZD_P1");   return e?std::atof(e):1.0;  }();  // first-pole ratio (1+3)
++        const double ZD_OS   = []{ const char* e=std::getenv("REBORN_ZD_OS");   return e?std::atof(e):2.0;  }();  // oversample (anti-alias)
++        const double ZD_ITER = []{ const char* e=std::getenv("REBORN_ZD_ITER"); return e?std::atof(e):4.0;  }();  // fixed-point iterations
++        // Integrator: 0 = trapezoidal (TPT, exact corner, tracks instantly -> no
++        // retriggered ring-up); 1 = backward-Euler (leaky, lags the corner ->
++        // rings UP over cycles, which is what produces ReBirth's retriggered
++        // "round chirp"; the ride is a loop-delay phenomenon, PLAN_DIODE_CHIRP
++        // 2026-09-05). Same coupled structure and unit-slope nonlinearities in
++        // both, so this A/Bs the integrator alone.
++        const double ZD_INT  = []{ const char* e=std::getenv("REBORN_ZD_INT");  return e?std::atof(e):0.0;  }();  // 0 trap, 1 backward-Euler
++        // Resonance feedback delay: 0 = implicit (zero-delay feedback, solved in
++        // the loop -> instant corner tracking, no retriggered ring-up); 1 =
++        // explicit (feedback uses the PREVIOUS substep's output -> a loop delay
++        // that lets the resonance ring UP over cycles, the mechanism the
++        // forward-Euler `rb` core rides with, PLAN_DIODE_CHIRP 2026-09-05). This
++        // is the axis that actually controls the ride, orthogonal to ZD_INT.
++        const double ZD_FBD  = []{ const char* e=std::getenv("REBORN_ZD_FBD");  return e?std::atof(e):0.0;  }();  // 0 implicit, 1 delayed feedback
+         const double aDFbHp = (D_FBHP > 0.0) ? (1.0 - std::exp(-2.0 * kPi * D_FBHP / sr)) : 0.0;
+         const double aHp     = A_HP  > 0.0   ? 1.0 - std::exp(-2.0 * kPi * A_HP / sr) : 0.0;
+         const double aShelf  = B_GAIN != 0.0 ? 1.0 - std::exp(-2.0 * kPi * B_FC / sr) : 0.0;
+@@ -1263,7 +1299,7 @@ public:
+                 }
+                 return o;
+             };
+-            const int osTpt = (!useRB && !useDiode) ? TPT_OS : 1;
++            const int osTpt = (!useRB && !useDiode && !useZD) ? TPT_OS : 1;
+             double osc = (osTpt > 1) ? 0.0 : genOsc(dt);
+             if (aOscHp > 0.0 && osTpt <= 1) {
+                 oscHpLp_ += aOscHp * (osc - oscHpLp_);
+@@ -1947,6 +1983,68 @@ public:
+                 dcap1_ = flushDenormal((float)dcap1_); dcap2_ = flushDenormal((float)dcap2_);
+                 dcap3_ = flushDenormal((float)dcap3_); dcap4_ = flushDenormal((float)dcap4_);
+                 y1 = dcap1_; y2 = dcap2_; y3 = dcap3_; y4 = dcap4_;
++                if (D_HF > 0.0) { dHfLp_ += aDHf * (y4 - dHfLp_); dHfLp_ = flushDenormal((float)dHfLp_); y4 = dHfLp_; }
++            } else if (useZD) {
++                // Zero-delay (TPT) coupled diode ladder. Each stage is a
++                // trapezoidal integrator whose input is the net diode current
++                // (the saturating difference to the stage below minus the one to
++                // the stage above), so the four stages are COUPLED, not buffered.
++                // g = tan(pi*fc/sr_os) sets the corner EXACTLY at fc, decoupled
++                // from the diode knee (ZD_VT) and the resonance gain (ZD_K). The
++                // whole loop (stages + resonance feedback) is solved implicitly
++                // per substep by fixed-point iteration (D'Angelo / Mystran). The
++                // saturators are unit-slope at the origin (sd'(0)=1, tanh'(0)=1)
++                // so ZD_VT/ZD_K move the knees WITHOUT shifting the corner.
++                const double drive_in = driveGain * DRIVE_MUL * osc;
++                const double inv2vt = 1.0 / (2.0 * ZD_VT);
++                const double twoVt  = 2.0 * ZD_VT;
++                // Unit-slope diode difference: sd(x) ~ x near 0, saturates at +/-2Vt.
++                auto sd = [inv2vt, twoVt](double x){ return twoVt * std::tanh(x * inv2vt); };
++                const bool   beEuler = (ZD_INT > 0.5);
++                // Corner coefficient: backward-Euler uses the raw step wc*T (leaky
++                // integrator, lags -> rings up); trapezoidal uses the tan prewarp
++                // (bilinear, exact corner -> tracks instantly). Both feed the SAME
++                // a = g*I + state update; only the state write-back and g differ.
++                const double gZ  = (beEuler ? (2.0 * kPi * fc / (sr * ZD_OS))
++                                            : std::tan(kPi * fc / (sr * ZD_OS))) * ZD_G;
++                const double gP1 = gZ * ZD_P1;                               // first pole different (1+3)
++                const double kd  = ZD_K * k;
++                const int    nit = (int)ZD_ITER;
++                const bool   fbDelay = (ZD_FBD > 0.5);
++                for (int oss = 0; oss < (int)ZD_OS; ++oss) {
++                    // States live in dcap1_..dcap4_ (backward-Euler: the output;
++                    // trapezoidal: the TPT s-memory). Warm-start the iterate from them.
++                    double a1 = dcap1_, a2 = dcap2_, a3 = dcap3_, a4 = dcap4_;
++                    // Delayed feedback: computed once from the PREVIOUS substep's
++                    // output (zdFb_) so the resonance loop carries a unit delay.
++                    const double uDelayed = drive_in - kd * std::tanh(zdFb_);
++                    for (int it = 0; it < nit; ++it) {
++                        const double u  = fbDelay ? uDelayed
++                                                  : drive_in - kd * std::tanh(a4);  // unit-slope resonance fb
++                        const double i1 = sd(u  - a1) - sd(a1 - a2);
++                        const double i2 = sd(a1 - a2) - sd(a2 - a3);
++                        const double i3 = sd(a2 - a3) - sd(a3 - a4);
++                        const double i4 = sd(a3 - a4) - sd(a4);
++                        a1 = gP1 * i1 + dcap1_;
++                        a2 = gZ  * i2 + dcap2_;
++                        a3 = gZ  * i3 + dcap3_;
++                        a4 = gZ  * i4 + dcap4_;
++                    }
++                    if (beEuler) {
++                        // Backward-Euler: state IS the output.
++                        dcap1_ = a1; dcap2_ = a2; dcap3_ = a3; dcap4_ = a4;
++                    } else {
++                        // Trapezoidal (TPT): s_new = 2*a - s_old.
++                        dcap1_ = 2.0 * a1 - dcap1_;
++                        dcap2_ = 2.0 * a2 - dcap2_;
++                        dcap3_ = 2.0 * a3 - dcap3_;
++                        dcap4_ = 2.0 * a4 - dcap4_;
++                    }
++                    if (fbDelay) zdFb_ = flushDenormal((float)a4);   // delay line for next substep
++                    y1 = a1; y2 = a2; y3 = a3; y4 = a4;
++                }
++                dcap1_ = flushDenormal((float)dcap1_); dcap2_ = flushDenormal((float)dcap2_);
++                dcap3_ = flushDenormal((float)dcap3_); dcap4_ = flushDenormal((float)dcap4_);
+             } else if (osTpt > 1) {
+                 // --- OVERSAMPLED TPT ladder ---
+                 // Oscillator, drive and ladder all run at osTpt x the host rate,
+@@ -2267,6 +2365,8 @@ private:
+     double fbHpLp_    = 0.0; // TEMP probe: feedback-highpass one-pole state
+     double dcap1_ = 0.0, dcap2_ = 0.0, dcap3_ = 0.0, dcap4_ = 0.0; // diode-ladder caps
+     double dFbHp_ = 0.0;     // diode-ladder feedback-highpass state
++    double dHfLp_ = 0.0;     // diode-ladder output HF-rolloff state
++    double zdFb_  = 0.0;     // zd core: delayed resonance feedback (REBORN_ZD_FBD)
+ };
+ 
+ } // namespace

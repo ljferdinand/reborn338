@@ -1,0 +1,17 @@
+# Text files are stored with LF and checked out with the platform's line ending.
+* text=auto
+
+# Patches must apply byte for byte.
+*.patch -text
+
+# Song, session, audio and image files are binary. The only ones the repository
+# holds are the generated songs in examples/.
+*.rbs   binary
+*.rbsx  binary
+*.rbm   binary
+*.wav   binary
+*.aif   binary
+*.aiff  binary
+*.flac  binary
+*.png   binary
+*.jpg   binary

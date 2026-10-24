@@ -1,0 +1,175 @@
+diff --git a/src/effects/pcf.cpp b/src/effects/pcf.cpp
+index f56cf53..072dad7 100644
+--- a/src/effects/pcf.cpp
++++ b/src/effects/pcf.cpp
+@@ -41,6 +41,7 @@
+ #include "reborn/audio.h"
+ #include <cmath>
+ #include <array>
++#include <cstdlib>
+ 
+ #include "pcf_presets.inc"
+ 
+@@ -115,6 +116,7 @@ constexpr float kEnvDepth = 0.95f;
+ constexpr float kFreqLo      = 9.01f;
+ constexpr float kLog2Span    = 10.653f;   // 0.08388 oct/byte * 127
+ constexpr float kMinCutoffHz = 5.0f;
++constexpr float kFmaxKneeHz  = 8000.0f;   // boundary above which the cutoff law is extrapolation
+ 
+ // Resonance: 1/Q = 0.1055 + 1.3378 * (1 - r)^1.77, residuals within 0.18 dB
+ // over Q bytes 0 to 112. Q(0) = 0.693, which is Butterworth to within a
+@@ -180,6 +182,58 @@ constexpr float kResGainDb[kResGainN]   = { 4.33f, 3.23f, 1.93f, 0.38f, -1.65f,
+ // dB at Q 112). See PCF_FINDINGS 12.
+ constexpr float kBpTrim = 1.53f;       // constant BP output gain (was k*1.147)
+ 
++// EXPERIMENTAL (exp/pcf-attack). Finite envelope attack time in milliseconds.
++// Default 0 reproduces the shipped INSTANT attack byte for byte. When > 0 the
++// envelope slews up toward a decaying target over this time constant, so on a
++// big sweep the cutoff rises to an IN-BAND peak (rounded, undershooting the
++// clamp) at ~this many ms instead of snapping open above the source. Measured
++// target: ReBirth's chirp brightness peaks at ~52 ms (renders/pcf-chirp).
++static float pcfAttackMs() {
++    static const float v = []{ const char* e = std::getenv("REBORN_PCF_ATK");
++                               return e ? static_cast<float>(std::atof(e)) : 0.0f; }();
++    return v;
++}
++
++// EXPERIMENTAL (exp/pcf-attack). Envelope-excursion SATURATION. Default off is
++// the shipped hard clamp of (cut + envelope), which rails cparam to 1.0 => fc
++// 14.5 kHz on a big sweep, so the cutoff over-opens ABOVE the source and wastes
++// the bright in-band phase (measured: our chirp brightness peaks ~200 ms late
++// where ReBirth's peaks at ~52 ms; renders/pcf-chirp). When on, only the
++// ENVELOPE excursion is saturated, and only within the headroom above the static
++// cutoff: cparam = cut + h*tanh(exc/h), h = 1 - cut. Two properties matter. With
++// exc = 0 (static, Amt 0) cparam is exactly the measured static cutoff, so static
++// parity is untouched. At small excursion the slope is 1, so the measured
++// small-Amt response is untouched too; only a large, over-opening excursion bends,
++// landing the swept peak in-band the way ReBirth's does. No free knob.
++static bool pcfSat() {
++    static const bool v = []{ const char* e = std::getenv("REBORN_PCF_SAT");
++                              return e && std::atof(e) != 0.0; }();
++    return v;
++}
++
++// EXPERIMENTAL (exp/pcf-attack). Cutoff-law CEILING in Hz. Default 0 is off (the
++// shipped extrapolated top of ~14.5 kHz at cparam 1.0). The map fc =
++// 9.01*2^(cparam*10.65) is only measured to ~8 kHz; the drone cannot resolve a
++// cutoff above the source, so everything above kFmaxKneeHz is extrapolation.
++// When set, the cutoff-sum is NOT clamped to 1.0; instead, above the 8 kHz knee
++// the log-frequency saturates toward log2(fmax), so BOTH the static maximum and
++// an envelope-driven over-open cap at fmax. A big sweep then peaks in-band
++// (bright immediately) instead of railing to 14.5 kHz, which is ReBirth's swept
++// behaviour, while every MEASURED static cutoff (<= 8 kHz) is left untouched.
++static float pcfFmax() {
++    static const float v = []{ const char* e = std::getenv("REBORN_PCF_FMAX");
++                               return e ? static_cast<float>(std::atof(e)) : 0.0f; }();
++    return v;
++}
++static inline float cparamMap(float cutBase, float exc, bool sat) {
++    if (!sat) return clampf(cutBase + exc, 0.0f, 1.0f);   // shipped hard clamp
++    const float cb = clampf(cutBase, 0.0f, 1.0f);
++    if (exc <= 0.0f) return clampf(cb + exc, 0.0f, 1.0f);
++    const float h = 1.0f - cb;
++    if (h <= 1e-6f) return 1.0f;
++    return cb + h * std::tanh(exc / h);
++}
++
+ class PCF final : public Effect {
+ public:
+     void prepare(double sampleRate) override {
+@@ -192,6 +246,7 @@ public:
+     void reset() override {
+         ic1L_ = ic2L_ = ic1R_ = ic2R_ = 0.0f;
+         env_ = 0.0f;
++        peakSrc_ = 0.0f;
+         tick32_ = 0;
+         started_ = false;
+         cutSm_ = p_[C_CUT];
+@@ -270,6 +325,15 @@ public:
+         const float tau = decayTau(dec);
+         const float envDecay = std::exp(-1.0f / (tau * sr));
+ 
++        // Optional finite envelope ATTACK (see pcfAttackMs). atkCoef == 1 is the
++        // instant path and leaves env_ exactly as the shipped code computed it.
++        const float atkMs   = pcfAttackMs();
++        const bool  atkOn   = atkMs > 0.0f;
++        const float atkCoef = atkOn ? (1.0f - std::exp(-1.0f / (atkMs * 0.001f * sr)))
++                                    : 1.0f;
++        const bool  sat  = pcfSat();    // saturate the envelope excursion (off = hard clamp)
++        const float fmax = pcfFmax();   // cutoff-law ceiling in Hz (0 = off, shipped 14.5 kHz top)
++
+         // --- Resonance -> damping k = 1/Q (smoothed per sample below) --------
+         const float kTarget = dampingFor(p_[C_RES]);
+ 
+@@ -298,16 +362,42 @@ public:
+                 sinceTick_ -= samplesPer32;
+                 fireTick(++tick32_);
+             }
+-            // The envelope decays; the pattern retriggers it.
+-            env_ = flushDenormal(env_ * envDecay);
++            // The envelope decays; the pattern retriggers it. With a finite
++            // attack the target peakSrc_ decays and env_ slews up toward it, so
++            // the cutoff ramps in rather than snapping. Instant path (atkCoef 1)
++            // is identical to the shipped `env_ *= envDecay`.
++            if (atkOn) {
++                peakSrc_ = flushDenormal(peakSrc_ * envDecay);
++                env_    += (peakSrc_ - env_) * atkCoef;
++                env_     = flushDenormal(env_);
++            } else {
++                env_ = flushDenormal(env_ * envDecay);
++            }
+ 
+-            // Freq and the envelope sum in PARAMETER space, and the sum is
+-            // clamped, which is why Amt does nothing once Freq is at maximum.
+-            const float cparam = clampf(cutSm_ + kEnvDepth * envSm_ * env_, 0.0f, 1.0f);
++            // Freq and the envelope sum in PARAMETER space.
++            const float exc = kEnvDepth * envSm_ * env_;
+             // The corner rides the resonance knob (see kResFc* above).
+             const float rr = clampf(p_[C_RES], 0.0f, kResMaxByte);
+             const float fcScale = 1.0f + rr * (kResFcB + rr * kResFcC);
+-            float fc = kFreqLo * std::exp2(cparam * kLog2Span) * fcScale;
++            float fc;
++            if (fmax > 0.0f) {
++                // Cutoff-law ceiling: leave the measured law (<= 8 kHz) intact and
++                // saturate the log-frequency toward log2(fmax) above the knee, on
++                // the UNCLAMPED sum, so a big sweep peaks in-band at fmax.
++                const float lfKnee = std::log2(kFmaxKneeHz / kFreqLo);
++                const float lfCeil = std::log2(fmax / kFreqLo);
++                float lf = std::max(0.0f, cutSm_ + exc) * kLog2Span;
++                if (lf > lfKnee && lfCeil > lfKnee) {
++                    const float head = lfCeil - lfKnee;
++                    lf = lfKnee + head * std::tanh((lf - lfKnee) / head);
++                }
++                fc = kFreqLo * std::exp2(lf) * fcScale;
++            } else {
++                // Default and SAT paths: the envelope excursion saturates within
++                // the headroom above the static cutoff (SAT), else hard clamp.
++                const float cparam = cparamMap(cutSm_, exc, sat);
++                fc = kFreqLo * std::exp2(cparam * kLog2Span) * fcScale;
++            }
+             if (fc > nyqLimit)    fc = nyqLimit;
+             if (fc < kMinCutoffHz) fc = kMinCutoffHz;
+ 
+@@ -376,8 +466,12 @@ private:
+             if ((int) pat.steps[i].step32 == pos) {
+                 // A retrigger REPLACES the level rather than adding to it: the
+                 // measured traces show every trigger reaching the same height
+-                // regardless of what the previous one left behind.
+-                env_ = clampf(pat.steps[i].velocity, 0.0f, 2.0f);
++                // regardless of what the previous one left behind. With a finite
++                // attack the retrigger replaces the DECAYING TARGET and env_
++                // slews to it; the instant path sets env_ directly, unchanged.
++                const float vel = clampf(pat.steps[i].velocity, 0.0f, 2.0f);
++                peakSrc_ = vel;
++                if (pcfAttackMs() <= 0.0f) env_ = vel;
+                 return;
+             }
+     }
+@@ -393,6 +487,7 @@ private:
+     float ic1R_ = 0.0f, ic2R_ = 0.0f;   // right SVF integrator states
+ 
+     float env_      = 0.0f;   // AD envelope level, retriggered by the pattern
++    float peakSrc_  = 0.0f;   // decaying attack target (finite-attack path only)
+     float cutSm_    = 0.5f;   // de-zippered cutoff knob
+     float envSm_    = 0.0f;   // de-zippered env-mod knob
+     float kSm_      = 1.4435f; // de-zippered damping coefficient (Q = 0.693)
